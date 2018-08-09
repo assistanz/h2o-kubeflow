@@ -13,13 +13,43 @@ local networkSpec = networkPolicy.mixin.spec;
         imagePullPolicy:: "IfNotPresent",
       },
 
+      modelHPA(name, namespace, replicas, labels={ app: name }): {
+        local userObj = std.split(namespace, "@"),
+        apiVersion: "autoscaling/v2beta1",
+        kind: "HorizontalPodAutoscaler",
+        metadata: {
+          labels: labels,
+          name: name,
+          namespace: userObj[0],
+        },
+        spec: {
+          scaleTargetRef: {
+            apiVersion: "extensions/v1beta1",
+            kind: "Deployment",
+            name: name,
+          },
+          minReplicas: replicas,
+          maxReplicas: 10,
+          metrics: [
+            {
+              type: "Resource",
+              resource: {
+                name: "memory",
+                targetAverageUtilization: 80
+              },
+            },
+          ],
+        },
+      },
+
       modelService(name, namespace, labels={ app: name }): {
+        local userObj = std.split(namespace, "@"),
         apiVersion: "v1",
         kind: "Service",
         metadata: {
           labels: labels,
           name: name,
-          namespace: namespace,
+          namespace: userObj[0],
         },
         spec: {
           ports: [
@@ -31,25 +61,26 @@ local networkSpec = networkPolicy.mixin.spec;
           ],
           selector: labels,
           type: "LoadBalancer",
-          sessionAffinity: "ClientIP",
         },
       },
 
       modelServer(name, namespace, memory, cpu, replicas, modelServerImage, labels={ app: name },):
+        local userObj = std.split(namespace, "@");
         local volume = {
           name: "local-data",
-          namespace: namespace,
+          namespace: userObj[0],
           emptyDir: {},
         };
         base(name, namespace, memory, cpu, replicas, modelServerImage, labels),
 
       local base(name, namespace, memory, cpu, replicas, modelServerImage, labels) =
         {
+          local userObj = std.split(namespace, "@"),
           apiVersion: "extensions/v1beta1",
           kind: "Deployment",
           metadata: {
             name: name,
-            namespace: namespace,
+            namespace: userObj[0],
             labels: labels,
           },
           spec: {
@@ -75,10 +106,6 @@ local networkSpec = networkPolicy.mixin.spec;
                       {
                         name: "MEMORY",
                         value: memory,
-                      },
-                      {
-                        name: "DEP_NAME",
-                        value: name
                       }
                     ],
                     ports: [
@@ -89,11 +116,14 @@ local networkSpec = networkPolicy.mixin.spec;
                     ],
                     workingDir: "/opt",
                     command: [
-                      "/bin/bash",
-                    ],
-                    args: [
-                      "-c",
-                      "/opt/docker-startup.sh && java -Xmx$(MEMORY)g -jar h2o.jar -flatfile flatfile.txt -name h2oCluster",
+                      "java",
+                      "-Xmx$(MEMORY)g",
+                      "-jar",
+                      "h2o.jar",
+                      "-name",
+                      name,
+                      "-flow_dir",
+                      "/home/" + userObj[0]
                     ],
                     resources: {
                       requests: {
@@ -105,9 +135,23 @@ local networkSpec = networkPolicy.mixin.spec;
                         cpu: cpu,
                       },
                     },
+                    volumeMounts: [                      
+                      {
+                        mountPath: "/home/" + userObj[0],
+                        name: userObj[0] + "-pvc"
+                      }
+                    ],
                     stdin: true,
                     tty: true,
                   },
+                ],
+                volumes: [
+                  {
+                    name: userObj[0] + "-pvc",
+                    persistentVolumeClaim: {
+                      claimName: userObj[1]
+                    }
+                  }
                 ],
                 dnsPolicy: "ClusterFirst",
                 restartPolicy: "Always",
